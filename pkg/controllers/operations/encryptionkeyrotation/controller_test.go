@@ -897,3 +897,125 @@ func TestReclaimStaleBeaconOwnerIfNeeded(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateStatusPausedCondition(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name            string
+		paused          bool
+		initiallyPaused bool
+		expectedStatus  string
+		expectedReason  string
+		expectedMessage string
+	}{
+		{
+			name:            "paused",
+			paused:          true,
+			initiallyPaused: false,
+			expectedStatus:  "True",
+			expectedReason:  opv1alpha1.PausedReason,
+			expectedMessage: "Operation is paused",
+		},
+		{
+			name:            "resumed",
+			paused:          false,
+			initiallyPaused: true,
+			expectedStatus:  "False",
+			expectedReason:  opv1alpha1.NotPausedReason,
+			expectedMessage: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := newOp()
+			op.Spec.Paused = tc.paused
+			op.Generation = 7
+
+			initialStatus := opv1alpha1.EncryptionKeyRotationStatus{
+				OperationStatus: opv1alpha1.OperationStatus{
+					Phase: opv1alpha1.OperationPhaseInProgress,
+				},
+				Step: opv1alpha1.EncryptionKeyRotationStepRotate,
+			}
+
+			if tc.initiallyPaused {
+				opv1alpha1.PausedCondition.True(&initialStatus)
+				opv1alpha1.PausedCondition.Reason(&initialStatus, opv1alpha1.PausedReason)
+				opv1alpha1.PausedCondition.Message(&initialStatus, "Operation is paused")
+			}
+
+			status := updateStatus(op, initialStatus)
+
+			if status.ObservedGeneration != int64(7) {
+				t.Errorf("ObservedGeneration = %d, want 7", status.ObservedGeneration)
+			}
+			if got := opv1alpha1.PausedCondition.GetStatus(&status); got != tc.expectedStatus {
+				t.Errorf("PausedCondition status = %q, want %q", got, tc.expectedStatus)
+			}
+			if got := opv1alpha1.PausedCondition.GetReason(&status); got != tc.expectedReason {
+				t.Errorf("PausedCondition reason = %q, want %q", got, tc.expectedReason)
+			}
+			if got := opv1alpha1.PausedCondition.GetMessage(&status); got != tc.expectedMessage {
+				t.Errorf("PausedCondition message = %q, want %q", got, tc.expectedMessage)
+			}
+
+			// Verify phase and step are unchanged
+			if status.Phase != initialStatus.Phase {
+				t.Errorf("Phase = %q, want %q (unchanged)", status.Phase, initialStatus.Phase)
+			}
+			if status.Step != initialStatus.Step {
+				t.Errorf("Step = %q, want %q (unchanged)", status.Step, initialStatus.Step)
+			}
+		})
+	}
+}
+
+func TestOnChange_Paused(t *testing.T) {
+	t.Parallel()
+
+	op := newOp()
+	op.Spec.Paused = true
+	op.Generation = 7
+
+	initialStatus := opv1alpha1.EncryptionKeyRotationStatus{
+		OperationStatus: opv1alpha1.OperationStatus{
+			Phase: opv1alpha1.OperationPhaseInProgress,
+		},
+		Step: opv1alpha1.EncryptionKeyRotationStepRotate,
+	}
+
+	op.Status = initialStatus
+
+	h := &handler{}
+	status, err := h.OnChange(op, op.Status)
+
+	if err != nil {
+		t.Fatalf("OnChange returned error: %v", err)
+	}
+
+	// Verify PausedCondition is set to True
+	if got := opv1alpha1.PausedCondition.GetStatus(&status); got != "True" {
+		t.Errorf("PausedCondition status = %q, want %q", got, "True")
+	}
+	if got := opv1alpha1.PausedCondition.GetReason(&status); got != opv1alpha1.PausedReason {
+		t.Errorf("PausedCondition reason = %q, want %q", got, opv1alpha1.PausedReason)
+	}
+	if got := opv1alpha1.PausedCondition.GetMessage(&status); got != "Operation is paused" {
+		t.Errorf("PausedCondition message = %q, want %q", got, "Operation is paused")
+	}
+
+	// Verify ObservedGeneration is updated
+	if status.ObservedGeneration != int64(7) {
+		t.Errorf("ObservedGeneration = %d, want 7", status.ObservedGeneration)
+	}
+
+	// Verify phase and step are preserved
+	if status.Phase != initialStatus.Phase {
+		t.Errorf("Phase = %q, want %q (unchanged)", status.Phase, initialStatus.Phase)
+	}
+	if status.Step != initialStatus.Step {
+		t.Errorf("Step = %q, want %q (unchanged)", status.Step, initialStatus.Step)
+	}
+}

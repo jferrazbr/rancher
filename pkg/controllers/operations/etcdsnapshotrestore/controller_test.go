@@ -404,3 +404,91 @@ func TestAssignedPlansAreOperationScoped(t *testing.T) {
 		})
 	}
 }
+
+func newOp() *opv1alpha1.ETCDSnapshotRestore {
+	return &opv1alpha1.ETCDSnapshotRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "restore-1",
+			Namespace:  "fleet-default",
+			UID:        types.UID("restore-uid"),
+			Generation: 1,
+		},
+		Spec: opv1alpha1.ETCDSnapshotRestoreSpec{
+			OperationSpec: opv1alpha1.OperationSpec{},
+		},
+	}
+}
+
+func TestUpdateStatusPausedCondition(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name            string
+		paused          bool
+		initiallyPaused bool
+		expectedStatus  string
+		expectedReason  string
+		expectedMessage string
+	}{
+		{
+			name:            "paused",
+			paused:          true,
+			initiallyPaused: false,
+			expectedStatus:  "True",
+			expectedReason:  opv1alpha1.PausedReason,
+			expectedMessage: "Operation is paused",
+		},
+		{
+			name:            "resumed",
+			paused:          false,
+			initiallyPaused: true,
+			expectedStatus:  "False",
+			expectedReason:  opv1alpha1.NotPausedReason,
+			expectedMessage: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := newOp()
+			op.Spec.Paused = tc.paused
+			op.Generation = 7
+
+			initialStatus := opv1alpha1.ETCDSnapshotRestoreStatus{
+				OperationStatus: opv1alpha1.OperationStatus{
+					Phase: opv1alpha1.OperationPhaseInProgress,
+				},
+				Step: opv1alpha1.ETCDSnapshotRestoreStepRestore,
+			}
+
+			if tc.initiallyPaused {
+				opv1alpha1.PausedCondition.True(&initialStatus)
+				opv1alpha1.PausedCondition.Reason(&initialStatus, opv1alpha1.PausedReason)
+				opv1alpha1.PausedCondition.Message(&initialStatus, "Operation is paused")
+			}
+
+			status := updateStatus(op, initialStatus)
+
+			if status.ObservedGeneration != int64(7) {
+				t.Errorf("ObservedGeneration = %d, want 7", status.ObservedGeneration)
+			}
+			if got := opv1alpha1.PausedCondition.GetStatus(&status); got != tc.expectedStatus {
+				t.Errorf("PausedCondition status = %q, want %q", got, tc.expectedStatus)
+			}
+			if got := opv1alpha1.PausedCondition.GetReason(&status); got != tc.expectedReason {
+				t.Errorf("PausedCondition reason = %q, want %q", got, tc.expectedReason)
+			}
+			if got := opv1alpha1.PausedCondition.GetMessage(&status); got != tc.expectedMessage {
+				t.Errorf("PausedCondition message = %q, want %q", got, tc.expectedMessage)
+			}
+
+			// Verify phase and step are unchanged
+			if status.Phase != initialStatus.Phase {
+				t.Errorf("Phase = %q, want %q (unchanged)", status.Phase, initialStatus.Phase)
+			}
+			if status.Step != initialStatus.Step {
+				t.Errorf("Step = %q, want %q (unchanged)", status.Step, initialStatus.Step)
+			}
+		})
+	}
+}

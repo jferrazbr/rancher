@@ -274,18 +274,68 @@ func (f *fakeBeaconClient) UpdateStatus(b *planv1alpha1.Beacon) (*planv1alpha1.B
 	return b, nil
 }
 
-func TestUpdateStatusPaused(t *testing.T) {
+// --- updateStatus ---------------------------------------------------------------------------
+
+func TestUpdateStatusPausedCondition(t *testing.T) {
 	t.Parallel()
 
-	op := newOp()
-	op.Spec.Paused = true
-	op.Generation = 7
+	cases := []struct {
+		name            string
+		paused          bool
+		initiallyPaused bool
+		expectedStatus  string
+		expectedReason  string
+		expectedMessage string
+	}{
+		{
+			name:            "paused",
+			paused:          true,
+			initiallyPaused: false,
+			expectedStatus:  "True",
+			expectedReason:  opv1alpha1.PausedReason,
+			expectedMessage: "Operation is paused",
+		},
+		{
+			name:            "resumed",
+			paused:          false,
+			initiallyPaused: true,
+			expectedStatus:  "False",
+			expectedReason:  opv1alpha1.NotPausedReason,
+			expectedMessage: "",
+		},
+	}
 
-	status := updateStatus(op, opv1alpha1.ETCDSnapshotSaveStatus{})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := newOp()
+			op.Spec.Paused = tc.paused
+			op.Generation = 7
 
-	assert.Equal(t, int64(7), status.ObservedGeneration, "ObservedGeneration must be copied from the op")
-	assert.Equal(t, "True", opv1alpha1.PausedCondition.GetStatus(&status))
-	assert.Equal(t, opv1alpha1.PausedReason, opv1alpha1.PausedCondition.GetReason(&status))
+			initialStatus := opv1alpha1.ETCDSnapshotSaveStatus{
+				OperationStatus: opv1alpha1.OperationStatus{
+					Phase: opv1alpha1.OperationPhaseInProgress,
+				},
+				Step: opv1alpha1.ETCDSnapshotSaveStepSave,
+			}
+
+			if tc.initiallyPaused {
+				opv1alpha1.PausedCondition.True(&initialStatus)
+				opv1alpha1.PausedCondition.Reason(&initialStatus, opv1alpha1.PausedReason)
+				opv1alpha1.PausedCondition.Message(&initialStatus, "Operation is paused")
+			}
+
+			status := updateStatus(op, initialStatus)
+
+			assert.Equal(t, int64(7), status.ObservedGeneration, "ObservedGeneration must be copied from the op")
+			assert.Equal(t, tc.expectedStatus, opv1alpha1.PausedCondition.GetStatus(&status))
+			assert.Equal(t, tc.expectedReason, opv1alpha1.PausedCondition.GetReason(&status))
+			assert.Equal(t, tc.expectedMessage, opv1alpha1.PausedCondition.GetMessage(&status))
+
+			// Verify phase and step are unchanged
+			assert.Equal(t, initialStatus.Phase, status.Phase, "Phase should be unchanged")
+			assert.Equal(t, initialStatus.Step, status.Step, "Step should be unchanged")
+		})
+	}
 }
 
 func TestUpdateStatusByPhase(t *testing.T) {
